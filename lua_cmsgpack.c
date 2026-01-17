@@ -437,11 +437,12 @@ void mp_encode_lua_table_as_map(lua_State *L, mp_buf *buf, int level) {
  * of keys from numerical keys from 1 up to N, with N being the total number
  * of elements, without any hole in the middle. */
 int table_is_an_array(lua_State *L) {
-    int count = 0, max = 0;
 #if LUA_VERSION_NUM < 503
     lua_Number n;
+    lua_Number count = 0, max = 0;
 #else
     lua_Integer n;
+    lua_Integer count = 0, max = 0;
 #endif
 
     /* Stack top on function entry */
