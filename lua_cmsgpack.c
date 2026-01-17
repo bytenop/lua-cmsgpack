@@ -708,7 +708,7 @@ void mp_decode_to_lua_array(lua_State *L, mp_cur *c, size_t len) {
     assert(len <= UINT_MAX);
     int index = 1;
 
-    lua_newtable(L);
+    lua_createtable(L, len, 0);
     luaL_checkstack(L, 1, "in function mp_decode_to_lua_array");
     while(len--) {
         lua_pushnumber(L,index++);
@@ -721,7 +721,7 @@ void mp_decode_to_lua_array(lua_State *L, mp_cur *c, size_t len) {
 void mp_decode_to_lua_hash(lua_State *L, mp_cur *c, size_t len, int t) {
     assert(len <= UINT_MAX);
 
-    lua_newtable(L);
+    lua_createtable(L, 0, len);
 
     while (len--) {
         mp_decode_to_lua_type(L, c, 0); /* key */
