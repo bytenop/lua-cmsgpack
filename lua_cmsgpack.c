@@ -109,17 +109,31 @@ mp_buf *mp_buf_new(lua_State *L) {
 
     /* Old size = 0; new size = sizeof(*buf) */
     buf = (mp_buf*)mp_realloc(L, NULL, 0, sizeof(*buf));
+    if (buf == NULL) {
+        luaL_error(L, "not enough memory");
+        return NULL;
+    }
 
     buf->b = NULL;
     buf->len = buf->free = 0;
     return buf;
 }
 
+void mp_buf_free(lua_State *L, mp_buf *buf);
+
 void mp_buf_append(lua_State *L, mp_buf *buf, const unsigned char *s, size_t len) {
     if (buf->free < len) {
         size_t newsize = (buf->len+len)*2;
 
-        buf->b = (unsigned char*)mp_realloc(L, buf->b, buf->len + buf->free, newsize);
+        unsigned char *b = (unsigned char*)mp_realloc(
+            L, buf->b, buf->len + buf->free, newsize);
+        if (b == NULL) {
+            mp_buf_free(L, buf);
+            luaL_error(L, "not enough memory");
+            return;
+        }
+
+        buf->b = b;
         buf->free = newsize - buf->len;
     }
     memcpy(buf->b+buf->len,s,len);
