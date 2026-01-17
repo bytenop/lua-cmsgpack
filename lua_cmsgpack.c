@@ -544,9 +544,165 @@ int mp_pack(lua_State *L) {
     return 1;
 }
 
+/*
+ * Skip element in msgpack stream
+ */
+
+void mp_skip(mp_cur *c);
+
+void mp_skip_array(mp_cur *c, size_t len) {
+    assert(len <= UINT_MAX);
+
+    while (len--) {
+        mp_skip(c);
+        if (c->err) return;
+    }
+}
+
+void mp_skip_hash(mp_cur *c, size_t len) {
+    assert(len <= UINT_MAX);
+
+    while (len--) {
+        mp_skip(c); /* key */
+        if (c->err) return;
+
+        mp_skip(c); /* value */
+        if (c->err) return;
+    }
+}
+
+void mp_skip(mp_cur *c) {
+    mp_cur_need(c, 1);
+
+    switch (c->p[0]) {
+        case 0xcc: /* uint 8 */
+            mp_cur_need(c, 2);
+            mp_cur_consume(c, 2);
+            break;
+        case 0xd0: /* int 8 */
+            mp_cur_need(c, 2);
+            mp_cur_consume(c, 2);
+            break;
+        case 0xcd: /* uint 16 */
+            mp_cur_need(c, 3);
+            mp_cur_consume(c, 3);
+            break;
+        case 0xd1: /* int 16 */
+            mp_cur_need(c, 3);
+            mp_cur_consume(c, 3);
+            break;
+        case 0xce: /* uint 32 */
+            mp_cur_need(c, 5);
+            mp_cur_consume(c, 5);
+            break;
+        case 0xd2: /* int 32 */
+            mp_cur_need(c, 5);
+            mp_cur_consume(c, 5);
+            break;
+        case 0xcf: /* uint 64 */
+            mp_cur_need(c, 9);
+            mp_cur_consume(c, 9);
+            break;
+        case 0xd3: /* int 64 */
+            mp_cur_need(c, 9);
+            mp_cur_consume(c, 9);
+            break;
+        case 0xc0: /* nil */
+            mp_cur_consume(c, 1);
+            break;
+        case 0xc3: /* true */
+            mp_cur_consume(c, 1);
+            break;
+        case 0xc2: /* false */
+            mp_cur_consume(c, 1);
+            break;
+        case 0xca: /* float */
+            mp_cur_need(c, 5);
+            mp_cur_consume(c, 5);
+            break;
+        case 0xcb: /* double */
+            mp_cur_need(c, 9);
+            mp_cur_consume(c, 9);
+            break;
+        case 0xd9: { /* raw 8 */
+            mp_cur_need(c, 2);
+            size_t l = c->p[1];
+            mp_cur_need(c, 2 + l);
+            mp_cur_consume(c, 2 + l);
+            break;
+        }
+        case 0xda: { /* raw 16 */
+            mp_cur_need(c, 3);
+            size_t l = (c->p[1] << 8) | c->p[2];
+            mp_cur_need(c, 3 + l);
+            mp_cur_consume(c, 3 + l);
+            break;
+        }
+        case 0xdb: { /* raw 32 */
+            mp_cur_need(c, 5);
+            size_t l = ((size_t)c->p[1] << 24) | ((size_t)c->p[2] << 16) |
+                       ((size_t)c->p[3] << 8) | (size_t)c->p[4];
+            mp_cur_need(c, 5 + l);
+            mp_cur_consume(c, 5 + l);
+            break;
+        }
+        case 0xdc: { /* array 16 */
+            mp_cur_need(c, 3);
+            size_t l = (c->p[1] << 8) | c->p[2];
+            mp_cur_consume(c, 3);
+            mp_skip_array(c, l);
+            break;
+        }
+        case 0xdd: { /* array 32 */
+            mp_cur_need(c, 5);
+            size_t l = ((size_t)c->p[1] << 24) | ((size_t)c->p[2] << 16) |
+                       ((size_t)c->p[3] << 8) | (size_t)c->p[4];
+            mp_cur_consume(c, 5);
+            mp_skip_array(c, l);
+            break;
+        }
+        case 0xde: { /* map 16 */
+            mp_cur_need(c, 3);
+            size_t l = (c->p[1] << 8) | c->p[2];
+            mp_cur_consume(c, 3);
+            mp_skip_hash(c, l);
+            break;
+        }
+        case 0xdf: { /* map 32 */
+            mp_cur_need(c, 5);
+            size_t l = ((size_t)c->p[1] << 24) | ((size_t)c->p[2] << 16) |
+                       ((size_t)c->p[3] << 8) | (size_t)c->p[4];
+            mp_cur_consume(c, 5);
+            mp_skip_hash(c, l);
+            break;
+        }
+        default: { /* types that can't be idenitified by first byte value. */
+            if ((c->p[0] & 0x80) == 0) { /* positive fixnum */
+                mp_cur_consume(c, 1);
+            } else if ((c->p[0] & 0xe0) == 0xe0) { /* negative fixnum */
+                mp_cur_consume(c, 1);
+            } else if ((c->p[0] & 0xe0) == 0xa0) { /* fix raw */
+                size_t l = c->p[0] & 0x1f;
+                mp_cur_need(c, 1 + l);
+                mp_cur_consume(c, 1 + l);
+            } else if ((c->p[0] & 0xf0) == 0x90) { /* fix array */
+                size_t l = c->p[0] & 0xf;
+                mp_cur_consume(c, 1);
+                mp_skip_array(c, l);
+            } else if ((c->p[0] & 0xf0) == 0x80) { /* fix map */
+                size_t l = c->p[0] & 0xf;
+                mp_cur_consume(c, 1);
+                mp_skip_hash(c, l);
+            } else {
+                c->err = MP_CUR_ERROR_BADFMT;
+            }
+        }
+    }
+}
+
 /* ------------------------------- Decoding --------------------------------- */
 
-void mp_decode_to_lua_type(lua_State *L, mp_cur *c);
+void mp_decode_to_lua_type(lua_State *L, mp_cur *c, int t);
 
 void mp_decode_to_lua_array(lua_State *L, mp_cur *c, size_t len) {
     assert(len <= UINT_MAX);
@@ -556,27 +712,57 @@ void mp_decode_to_lua_array(lua_State *L, mp_cur *c, size_t len) {
     luaL_checkstack(L, 1, "in function mp_decode_to_lua_array");
     while(len--) {
         lua_pushnumber(L,index++);
-        mp_decode_to_lua_type(L,c);
+        mp_decode_to_lua_type(L,c,0);
         if (c->err) return;
         lua_settable(L,-3);
     }
 }
 
-void mp_decode_to_lua_hash(lua_State *L, mp_cur *c, size_t len) {
+void mp_decode_to_lua_hash(lua_State *L, mp_cur *c, size_t len, int t) {
     assert(len <= UINT_MAX);
+
     lua_newtable(L);
-    while(len--) {
-        mp_decode_to_lua_type(L,c); /* key */
+
+    while (len--) {
+        mp_decode_to_lua_type(L, c, 0); /* key */
         if (c->err) return;
-        mp_decode_to_lua_type(L,c); /* value */
+
+        int ct = 0;
+
+        if (t > 0) {
+            lua_pushvalue(L, -1);
+            int type = lua_rawget(L, t);
+
+            if (type == LUA_TNIL) {
+                lua_pop(L, 2);
+
+                mp_skip(c); /* skip value */
+                if (c->err) return;
+
+                continue;
+            }
+
+            if (type == LUA_TTABLE) {
+                ct = lua_absindex(L, -1);
+            } else {
+                lua_pop(L, 1);
+            }
+        }
+
+        mp_decode_to_lua_type(L, c, ct); /* value */
         if (c->err) return;
-        lua_settable(L,-3);
+
+        if (ct > 0) {
+            lua_remove(L, ct);
+        }
+
+        lua_settable(L, -3);
     }
 }
 
 /* Decode a Message Pack raw object pointed by the string cursor 'c' to
  * a Lua type, that is left as the only result on the stack. */
-void mp_decode_to_lua_type(lua_State *L, mp_cur *c) {
+void mp_decode_to_lua_type(lua_State *L, mp_cur *c, int t) {
     mp_cur_need(c,1);
 
     /* If we return more than 18 elements, we must resize the stack to
@@ -750,7 +936,7 @@ void mp_decode_to_lua_type(lua_State *L, mp_cur *c) {
         {
             size_t l = (c->p[1] << 8) | c->p[2];
             mp_cur_consume(c,3);
-            mp_decode_to_lua_hash(L,c,l);
+            mp_decode_to_lua_hash(L,c,l,t);
         }
         break;
     case 0xdf:  /* map 32 */
@@ -761,7 +947,7 @@ void mp_decode_to_lua_type(lua_State *L, mp_cur *c) {
                        ((size_t)c->p[3] << 8) |
                        (size_t)c->p[4];
             mp_cur_consume(c,5);
-            mp_decode_to_lua_hash(L,c,l);
+            mp_decode_to_lua_hash(L,c,l,t);
         }
         break;
     default:    /* types that can't be idenitified by first byte value. */
@@ -776,21 +962,21 @@ void mp_decode_to_lua_type(lua_State *L, mp_cur *c) {
             mp_cur_need(c,1+l);
             lua_pushlstring(L,(char*)c->p+1,l);
             mp_cur_consume(c,1+l);
-        } else if ((c->p[0] & 0xf0) == 0x90) {  /* fix map */
+        } else if ((c->p[0] & 0xf0) == 0x90) {  /* fix array */
             size_t l = c->p[0] & 0xf;
             mp_cur_consume(c,1);
             mp_decode_to_lua_array(L,c,l);
         } else if ((c->p[0] & 0xf0) == 0x80) {  /* fix map */
             size_t l = c->p[0] & 0xf;
             mp_cur_consume(c,1);
-            mp_decode_to_lua_hash(L,c,l);
+            mp_decode_to_lua_hash(L,c,l,t);
         } else {
             c->err = MP_CUR_ERROR_BADFMT;
         }
     }
 }
 
-int mp_unpack_full(lua_State *L, int limit, int offset) {
+int mp_unpack_full(lua_State *L, int limit, int offset, int pattern) {
     size_t len;
     const char *s;
     mp_cur c;
@@ -807,14 +993,20 @@ int mp_unpack_full(lua_State *L, int limit, int offset) {
         return luaL_error(L,
             "Start offset %d greater than input length %d.", offset, len);
 
+    int offsetIndex = 0;
+
     if (decode_all) limit = INT_MAX;
+    else {
+        lua_pushnil(L);
+        offsetIndex = lua_absindex(L, -1);
+    }
 
     mp_cur_init(&c,(const unsigned char *)s+offset,len-offset);
 
     /* We loop over the decode because this could be a stream
      * of multiple top-level values serialized together */
     for(cnt = 0; c.left > 0 && cnt < limit; cnt++) {
-        mp_decode_to_lua_type(L,&c);
+        mp_decode_to_lua_type(L,&c,pattern);
 
         if (c.err == MP_CUR_ERROR_EOF) {
             return luaL_error(L,"Missing bytes in input.");
@@ -839,7 +1031,7 @@ int mp_unpack_full(lua_State *L, int limit, int offset) {
          * In this case, we have one arg on the stack
          * for this function, so we insert our first return
          * value at position 2. */
-        lua_insert(L, 2);
+        lua_replace(L, offsetIndex);
         cnt += 1; /* increase return count by one to make room for offset */
     }
 
@@ -847,14 +1039,26 @@ int mp_unpack_full(lua_State *L, int limit, int offset) {
 }
 
 int mp_unpack(lua_State *L) {
-    return mp_unpack_full(L, 0, 0);
+    return mp_unpack_full(L, 0, 0, 0);
 }
 
 int mp_unpack_one(lua_State *L) {
     int offset = luaL_optinteger(L, 2, 0);
     /* Variable pop because offset may not exist */
     lua_pop(L, lua_gettop(L)-1);
-    return mp_unpack_full(L, 1, offset);
+    return mp_unpack_full(L, 1, offset, 0);
+}
+
+int mp_unpack_table(lua_State *L) {
+    luaL_checktype(L, 2, LUA_TTABLE);
+    int offset = luaL_optinteger(L, 3, 0);
+
+    lua_settop(L, 2);
+    mp_unpack_full(L, 1, offset, 2);
+
+    /* Revert Stack from (offset, table) to (table, offset) */
+    lua_insert(L, -2);
+    return 2;
 }
 
 int mp_unpack_limit(lua_State *L) {
@@ -863,7 +1067,7 @@ int mp_unpack_limit(lua_State *L) {
     /* Variable pop because offset may not exist */
     lua_pop(L, lua_gettop(L)-1);
 
-    return mp_unpack_full(L, limit, offset);
+    return mp_unpack_full(L, limit, offset, 0);
 }
 
 int mp_safe(lua_State *L) {
@@ -893,6 +1097,7 @@ const struct luaL_Reg cmds[] = {
     {"pack", mp_pack},
     {"unpack", mp_unpack},
     {"unpack_one", mp_unpack_one},
+    {"unpack_table", mp_unpack_table},
     {"unpack_limit", mp_unpack_limit},
     {0}
 };
